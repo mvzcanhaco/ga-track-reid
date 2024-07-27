@@ -33,6 +33,14 @@ def draw_frame(screen, font, frame, generation=0, best_params={}, best_fitness=0
 
     pygame.display.flip()
 
+def draw_bounding_boxes(frame, detections):
+    for detection in detections:
+        bbox = detection.to_tlbr()
+        track_id = detection.track_id
+        cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 255, 0), 2)
+        cv2.putText(frame, f'ID: {track_id}', (int(bbox[0]), int(bbox[1]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (0, 255, 0), 2)
+
 def visualize_progress(generation, best_params, best_fitness, frame=None):
     screen, font = initialize_pygame()
     draw_frame(screen, font, frame, generation, best_params, best_fitness)
