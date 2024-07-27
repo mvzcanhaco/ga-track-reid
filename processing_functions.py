@@ -18,16 +18,17 @@ def process_frame(frame, detection_model, feature_extraction_model, confidence_t
     height, width = frame.shape[:2]
     new_dim = (int(width * scale_factor), int(height * scale_factor))
     frame_resized = cv2.resize(frame, new_dim)
+    print("Processing frame...")
     detections = detect_people(frame_resized, detection_model, confidence_threshold)
     if len(detections) == 0:
+        print("No detections in frame.")
         return frame, []
 
     bboxes = [det[0] for det in detections]
     confidences = [det[1] for det in detections]
     features = []
     for bbox in bboxes:
-        x1, y1, x2, y2 = map(int, bbox)  # Ensure the coordinates are integers
-        # Ensure bounding box is within frame bounds
+        x1, y1, x2, y2 = map(int, bbox)
         x1 = max(0, x1)
         y1 = max(0, y1)
         x2 = min(width, x2)
@@ -35,21 +36,25 @@ def process_frame(frame, detection_model, feature_extraction_model, confidence_t
 
         person_image = frame[y1:y2, x1:x2]
 
-        # Handle empty crop
         if person_image.size == 0:
             print("Empty crop detected, skipping this bbox.")
             continue
 
         feature = extract_features(person_image, bbox, feature_extraction_model)
+        print(f"Extracted feature shape: {feature.shape}")
         features.append(feature)
 
-    # Ensure features are in the correct shape for DeepSORT
     features = np.array(features)
     if features.ndim == 3:
         features = features.reshape(features.shape[0], -1)
+    print(f"Features reshaped for DeepSORT: {features.shape}")
 
     formatted_detections = [[bbox, conf, 'person'] for bbox, conf in zip(bboxes, confidences)]
-    tracks = deepsort.update_tracks(raw_detections=formatted_detections, embeds=features, frame=frame)
+    tracks = deepsort.update_tracks(raw_detections=formatted_detections, embeds=features, frame=frame_resized)
+    print("Frame processing complete.")
+
+    for track in tracks:
+        print(f"Track ID: {track.track_id}, BBox: {track.to_tlbr()}")
 
     return frame_resized, tracks
 
@@ -97,11 +102,11 @@ def process_video(video_path, deepsort, detection_model, feature_extraction_mode
 def detect_people(frame, model, confidence_threshold):
     results = model(frame)
     detections = []
-    for result in results.xyxy[0].cpu().numpy():
-        if result[4] > confidence_threshold:  # Confidence score
-            bbox = result[:4]  # Bounding box coordinates
-            score = result[4]  # Confidence score
-            class_id = int(result[5])  # Class ID
+    for result in results[0].boxes:
+        if result.conf > confidence_threshold:  # Use the confidence score from the result
+            bbox = result.xyxy[0].cpu().numpy()  # Bounding box coordinates
+            score = result.conf.item()  # Confidence score
+            class_id = int(result.cls.item())  # Class ID
             detections.append((bbox, score, class_id))
     return detections
 
@@ -121,39 +126,10 @@ def extract_features(image, bbox, feature_extraction_model):
     return features
 
 
-def calculate_reid_metrics(detections, ground_truth_ids):
-    all_labels = []
-    all_preds = []
-    for track_list in detections:
-        if isinstance(track_list, list):
-            for track in track_list:
-                all_labels.append(track.track_id in ground_truth_ids)
-                all_preds.append(
-                    track.conf if hasattr(track, 'conf') else 1.0)  # Use a default confidence of 1.0 if not available
-        else:
-            all_labels.append(track_list.track_id in ground_truth_ids)
-            all_preds.append(track_list.conf if hasattr(track_list, 'conf') else 1.0)
-
-    # Ensure all_labels and all_preds are not empty
-    if not all_labels or not all_preds:
-        return 0.0, 0.0
-
-    # Calculate average precision
-    average_precision = average_precision_score(all_labels, all_preds)
-
-    # For simplicity, consider the CMC Rank-1 as the ratio of correct IDs at the first position
-    cmc_rank1 = sum(all_labels) / len(all_labels) if all_labels else 0
-
-    return average_precision, cmc_rank1
-
-
-def simplified_evaluate_metrics(detections):
-    """
-    Avalia métricas simplificadas.
-    """
-    total_frames = len(detections)  # Número total de frames processados (imagens e frames de vídeo)
+def simplified_evaluate_metrics(detections, current_folder, all_ids_dict):
+    total_frames = len(detections)
     frames_with_detections = sum(
-        1 for d in detections if isinstance(d, list) and len(d) > 0)  # Frames com pelo menos uma detecção
+        1 for d in detections if isinstance(d, list) and len(d) > 0)
     detection_proportion = frames_with_detections / total_frames if total_frames > 0 else 0
 
     unique_ids = set()
@@ -166,4 +142,19 @@ def simplified_evaluate_metrics(detections):
 
     reid_precision = 1 / len(unique_ids) if unique_ids else 0
 
-    return detection_proportion, reid_precision
+    if current_folder not in all_ids_dict:
+        all_ids_dict[current_folder] = set()
+    all_ids_dict[current_folder].update(unique_ids)
+
+    return detection_proportion, reid_precision, all_ids_dict
+
+
+def unique_ids_across_folders_metric(all_ids_dict):
+    all_ids = set()
+    for ids in all_ids_dict.values():
+        all_ids.update(ids)
+
+    total_ids = sum(len(ids) for ids in all_ids_dict.values())
+    unique_across_folders = 1 / (total_ids / len(all_ids)) if len(all_ids) > 0 else 0
+
+    return unique_across_folders
