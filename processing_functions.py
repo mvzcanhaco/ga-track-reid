@@ -7,7 +7,6 @@ from visualization import draw_frame, draw_bounding_boxes
 
 
 def preprocess_image(frame, brightness, contrast):
-    # Ajuste de brilho e contraste
     frame = cv2.convertScaleAbs(frame, alpha=contrast, beta=brightness)
     return frame
 
@@ -33,13 +32,10 @@ def process_frame(frame, detection_model, feature_extraction_model, confidence_t
         y1 = max(0, y1)
         x2 = min(width, x2)
         y2 = min(height, y2)
-
         person_image = frame[y1:y2, x1:x2]
-
         if person_image.size == 0:
             print("Empty crop detected, skipping this bbox.")
             continue
-
         feature = extract_features(person_image, bbox, feature_extraction_model)
         print(f"Extracted feature shape: {feature.shape}")
         features.append(feature)
@@ -112,49 +108,48 @@ def detect_people(frame, model, confidence_threshold):
 
 
 def extract_features(image, bbox, feature_extraction_model):
-    # Preprocess the image for feature extraction
     crop = image
     if crop.size == 0:
         print("Error: The crop is empty.")
-        return np.zeros((1, 1280))  # Return a dummy feature vector
+        return np.zeros((1, 1280))
     img = cv2.resize(crop, (224, 224))
-    img = img.astype('float32') / 255.0  # Normalize the image
-    img = np.expand_dims(img, axis=0)  # Add batch dimension
-
-    # Extract features using the model
+    img = img.astype('float32') / 255.0
+    img = np.expand_dims(img, axis=0)
     features = feature_extraction_model.predict(img)
     return features
 
 
-def simplified_evaluate_metrics(detections, current_folder, all_ids_dict):
+def simplified_evaluate_metrics(detections, processed_folders):
     total_frames = len(detections)
-    frames_with_detections = sum(
-        1 for d in detections if isinstance(d, list) and len(d) > 0)
+    frames_with_detections = sum(1 for d in detections if isinstance(d, list) and len(d) > 0)
     detection_proportion = frames_with_detections / total_frames if total_frames > 0 else 0
 
     unique_ids = set()
+    all_ids_dict = {}
+
     for track_list in detections:
         if isinstance(track_list, list):
             for track in track_list:
                 unique_ids.add(track.track_id)
+                current_folder = tuple(processed_folders)
+                if current_folder not in all_ids_dict:
+                    all_ids_dict[current_folder] = set()
+                all_ids_dict[current_folder].add(track.track_id)
         else:
             unique_ids.add(track_list.track_id)
+            current_folder = tuple(processed_folders)
+            if current_folder not in all_ids_dict:
+                all_ids_dict[current_folder] = set()
+            all_ids_dict[current_folder].add(track_list.track_id)
 
     reid_precision = 1 / len(unique_ids) if unique_ids else 0
 
-    if current_folder not in all_ids_dict:
-        all_ids_dict[current_folder] = set()
-    all_ids_dict[current_folder].update(unique_ids)
-
-    return detection_proportion, reid_precision, all_ids_dict
-
-
-def unique_ids_across_folders_metric(all_ids_dict):
+    inter_folder_precision = 0
     all_ids = set()
-    for ids in all_ids_dict.values():
-        all_ids.update(ids)
+    for folder_ids in all_ids_dict.values():
+        if len(all_ids.intersection(folder_ids)) > 0:
+            inter_folder_precision += 1
+        all_ids.update(folder_ids)
+    inter_folder_precision = 1 - inter_folder_precision / len(all_ids_dict) if all_ids_dict else 0
 
-    total_ids = sum(len(ids) for ids in all_ids_dict.values())
-    unique_across_folders = 1 / (total_ids / len(all_ids)) if len(all_ids) > 0 else 0
-
-    return unique_across_folders
+    return detection_proportion, reid_precision, inter_folder_precision

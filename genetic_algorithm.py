@@ -9,24 +9,21 @@ param_ranges = {
     'scale_factor': (0.5, 2.0),
     'brightness': (-50, 50),
     'contrast': (0.5, 2.0),
-    'max_cosine_distance': (0.1, 0.4),
-    'nn_budget': (50, 150)
+    'max_cosine_distance': (0.1, 0.4)
 }
 
 
 def initialize_population(pop_size, initial_params):
     population = [initial_params]
-    for _ in range(pop_size - 1):  # Reduzir em um o tamanho da população, já que adicionamos manualmente um indivíduo
+    for _ in range(pop_size - 1):
         individual = {
             'confidence_threshold': random.uniform(param_ranges['confidence_threshold'][0],
                                                    param_ranges['confidence_threshold'][1]),
             'max_cosine_distance': random.uniform(param_ranges['max_cosine_distance'][0],
                                                   param_ranges['max_cosine_distance'][1]),
-            'scale_factor': random.uniform(param_ranges['scale_factor'][0],
-                                           param_ranges['scale_factor'][1]),
+            'scale_factor': random.uniform(param_ranges['scale_factor'][0], param_ranges['scale_factor'][1]),
             'brightness': random.uniform(param_ranges['brightness'][0], param_ranges['brightness'][1]),
             'contrast': random.uniform(param_ranges['contrast'][0], param_ranges['contrast'][1]),
-            'nn_budget': 100
         }
         population.append(individual)
     return population
@@ -63,25 +60,43 @@ def mutate(individual, mutation_rate, generation, max_generations):
     return individual
 
 
+def individual_to_string(individual):
+    return f"{individual['confidence_threshold']},{individual['max_cosine_distance']},{individual['scale_factor']},{individual['brightness']},{individual['contrast']}"
+
+
 def genetic_algorithm(pop_size, generations, num_select, evaluate_models, initial_params, screen, font, progress_file,
-                      accuracies, best_fitnesses, mutation_rate=0.1, elitism_rate=0.1):
-    global best_individual, best_fitness
+                      mutation_rate=0.1, elitism_rate=0.1):
+    global best_fitness, best_individual
     population = initialize_population(pop_size, initial_params)
+    print(population)
+    individual_id_map = {}
+    next_id = 0
 
     with open(progress_file, 'w') as f:
-        f.write("generation,best_fitness,confidence_threshold,max_cosine_distance,scale_factor,brightness,contrast\n")
+        f.write(
+            "generation,id,confidence_threshold,max_cosine_distance,scale_factor,brightness,contrast,detection_proportion,reid_precision,unique_ids_across_folders,fitness,best_of_population,Best_of_generations\n")
 
-    num_elites = int(pop_size * elitism_rate)
+    num_elites = max(1, int(pop_size * elitism_rate))
 
     for generation in range(generations):
         print(f"Processing Generation {generation + 1}/{generations}")
-        fitnesses = np.array([evaluate_models(ind) for ind in population])
-        best_fitness = np.max(fitnesses)
-        best_individual = population[np.argmax(fitnesses)]
-        print(f"Best fitness: {best_fitness}, Best params: {best_individual}")
+        fitnesses = []
+        all_metrics = []
+        individual_ids = []
+        for ind in population:
+            if str(ind) not in individual_id_map:
+                individual_id_map[str(ind)] = next_id
+                next_id += 1
+            individual_id = individual_id_map[str(ind)]
+            individual_ids.append(individual_id)
+            metrics = evaluate_models(ind, generation, individual_id_map, next_id)
+            fitness = 0.6 * metrics['detection_proportion'] + 0.3 * metrics['reid_precision'] + 0.1 * metrics[
+                'inter_folder_precision']
+            fitnesses.append(fitness)
+            all_metrics.append(metrics)
 
-        accuracies.append(fitnesses)
-        best_fitnesses.append(best_fitness)
+        best_fitness = max(fitnesses)
+        best_individual = population[np.argmax(fitnesses)]
 
         # Seleção com elitismo
         elite_indices = np.argsort(fitnesses)[-num_elites:]
@@ -100,10 +115,14 @@ def genetic_algorithm(pop_size, generations, num_select, evaluate_models, initia
         population = new_population
 
         draw_frame(screen, font, None, generation + 1, best_individual, best_fitness)
-        # update_graph(screen, font, accuracies, generations, best_fitnesses)
+        #update_graph(screen, font, fitnesses, generation + 1, [best_fitness])
 
         with open(progress_file, 'a') as f:
-            f.write(
-                f"{generation},{best_fitness},{best_individual['confidence_threshold']},{best_individual['max_cosine_distance']},{best_individual['scale_factor']},{best_individual['brightness']},{best_individual['contrast']}\n")
+            for idx, individual in enumerate(population):
+                best_of_population = 'BP' if fitnesses[idx] == best_fitness else ''
+                best_of_generations = 'BG' if fitnesses[idx] == max(fitnesses) else ''
+                best_marker = best_of_population if best_of_population else best_of_generations
+                f.write(
+                    f"{generation},{individual_ids[idx]},{individual['confidence_threshold']},{individual['max_cosine_distance']},{individual['scale_factor']},{individual['brightness']},{individual['contrast']},{all_metrics[idx]['detection_proportion']},{all_metrics[idx]['reid_precision']},{all_metrics[idx]['inter_folder_precision']},{fitnesses[idx]},{best_marker}\n")
 
     return best_individual, best_fitness
