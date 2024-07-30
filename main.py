@@ -124,11 +124,11 @@ if __name__ == "__main__":
                                individual_id_map, next_id)
 
 
-    generations = 2
+    generations = 10
     best_params, best_fitness = genetic_algorithm(
-        pop_size=5,
+        pop_size=20,
         generations=generations,
-        num_select=2,
+        num_select=5,
         evaluate_models=evaluate_models_lambda,
         initial_params=initial_params,
         screen=screen,
